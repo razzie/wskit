@@ -89,15 +89,6 @@ func (b *broadcaster[T]) run() {
 	}
 }
 
-func (b *broadcaster[T]) send(client chan<- []byte, m []byte, wg *sync.WaitGroup) {
-	defer wg.Done()
-	select {
-	case client <- m:
-	case <-time.After(b.timeout):
-		go func() { b.unreg <- client }()
-	}
-}
-
 func (b *broadcaster[T]) broadcast(m T) {
 	bytes, err := json.Marshal(m)
 	if err != nil {
@@ -111,10 +102,20 @@ func (b *broadcaster[T]) broadcast(m T) {
 		return
 	}
 
+	timeout := make(chan struct{})
+	time.AfterFunc(b.timeout, func() { close(timeout) })
 	var wg sync.WaitGroup
 	wg.Add(len(b.clients))
 	for client := range b.clients {
-		go b.send(client, bytes, &wg)
+		client := client
+		go func() {
+			defer wg.Done()
+			select {
+			case client <- bytes:
+			case <-timeout:
+				go func() { b.unreg <- client }()
+			}
+		}()
 	}
 	wg.Wait()
 }
