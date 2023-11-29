@@ -9,30 +9,62 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
+type BroadcasterOption func(*broadcasterOptions)
+
+func WithTimeout(timeout time.Duration) BroadcasterOption {
+	return func(bo *broadcasterOptions) {
+		bo.timeout = timeout
+	}
 }
 
-func Broadcaster[T any](input <-chan T, timeout time.Duration) http.Handler {
+func WithUpgrader(upgrader *websocket.Upgrader) BroadcasterOption {
+	return func(bo *broadcasterOptions) {
+		bo.upgrader = upgrader
+	}
+}
+
+func WithResponseHeader(responseHeader http.Header) BroadcasterOption {
+	return func(bo *broadcasterOptions) {
+		bo.responseHeader = responseHeader
+	}
+}
+
+func Broadcaster[T any](input <-chan T, options ...BroadcasterOption) http.Handler {
 	b := &broadcaster[T]{
+		broadcasterOptions: broadcasterOptions{
+			upgrader: &defaultUpgrader,
+			timeout:  -1,
+		},
 		input:   input,
-		timeout: timeout,
 		clients: make(map[chan<- []byte]bool),
 		reg:     make(chan chan<- []byte),
 		unreg:   make(chan chan<- []byte),
+	}
+	for _, opt := range options {
+		opt(&b.broadcasterOptions)
 	}
 	go b.run()
 	return b
 }
 
+var defaultUpgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
+}
+
 type broadcaster[T any] struct {
+	broadcasterOptions
 	input   <-chan T
-	timeout time.Duration
 	clients map[chan<- []byte]bool
 	reg     chan chan<- []byte
 	unreg   chan chan<- []byte
+}
+
+type broadcasterOptions struct {
+	timeout        time.Duration
+	upgrader       *websocket.Upgrader
+	responseHeader http.Header
 }
 
 func (b *broadcaster[T]) run() {
@@ -71,6 +103,14 @@ func (b *broadcaster[T]) broadcast(m T) {
 	if err != nil {
 		return
 	}
+
+	if b.timeout < 0 {
+		for client := range b.clients {
+			client <- bytes
+		}
+		return
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(len(b.clients))
 	for client := range b.clients {
@@ -89,7 +129,7 @@ func (b *broadcaster[T]) close() {
 }
 
 func (b *broadcaster[T]) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := b.upgrader.Upgrade(w, r, b.responseHeader)
 	if err != nil {
 		http.Error(w, "Could not upgrade to WebSocket", http.StatusBadRequest)
 		return
