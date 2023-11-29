@@ -90,6 +90,10 @@ func (b *broadcaster[T]) run() {
 }
 
 func (b *broadcaster[T]) broadcast(m T) {
+	if len(b.clients) == 0 {
+		return
+	}
+
 	bytes, err := json.Marshal(m)
 	if err != nil {
 		return
