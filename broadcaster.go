@@ -159,6 +159,9 @@ func (b *broadcaster[T]) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	for m := range msgchan {
 		if err := conn.WriteMessage(websocket.TextMessage, m); err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				b.logger.Error("unexpected websocket error: %v", err)
+			}
 			return
 		}
 	}
