@@ -2,6 +2,7 @@ package wskit
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -29,11 +30,18 @@ func WithResponseHeader(responseHeader http.Header) BroadcasterOption {
 	}
 }
 
+func WithLogger(logger *slog.Logger) BroadcasterOption {
+	return func(bo *broadcasterOptions) {
+		bo.logger = logger
+	}
+}
+
 func Broadcaster[T any](input <-chan T, options ...BroadcasterOption) http.Handler {
 	b := &broadcaster[T]{
 		broadcasterOptions: broadcasterOptions{
 			upgrader: &defaultUpgrader,
 			timeout:  -1,
+			logger:   slog.Default(),
 		},
 		input:   input,
 		clients: make(map[chan<- []byte]bool),
@@ -65,6 +73,7 @@ type broadcasterOptions struct {
 	timeout        time.Duration
 	upgrader       *websocket.Upgrader
 	responseHeader http.Header
+	logger         *slog.Logger
 }
 
 func (b *broadcaster[T]) run() {
@@ -96,6 +105,7 @@ func (b *broadcaster[T]) broadcast(m T) {
 
 	bytes, err := json.Marshal(m)
 	if err != nil {
+		b.logger.Error("failed to serialize broadcasted message: %v", err)
 		return
 	}
 
