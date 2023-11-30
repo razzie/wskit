@@ -47,6 +47,7 @@ func Broadcaster[T any](input <-chan T, options ...BroadcasterOption) http.Handl
 		clients: make(map[chan<- []byte]bool),
 		reg:     make(chan chan<- []byte),
 		unreg:   make(chan chan<- []byte),
+		closed:  make(chan struct{}),
 	}
 	for _, opt := range options {
 		opt(&b.broadcasterOptions)
@@ -67,6 +68,7 @@ type broadcaster[T any] struct {
 	clients map[chan<- []byte]bool
 	reg     chan chan<- []byte
 	unreg   chan chan<- []byte
+	closed  chan struct{}
 }
 
 type broadcasterOptions struct {
@@ -135,8 +137,7 @@ func (b *broadcaster[T]) broadcast(m T) {
 }
 
 func (b *broadcaster[T]) close() {
-	close(b.reg)
-	close(b.unreg)
+	close(b.closed)
 	for client := range b.clients {
 		close(client)
 	}
@@ -152,9 +153,18 @@ func (b *broadcaster[T]) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 
 	msgchan := make(chan []byte)
-	b.reg <- msgchan
+	select {
+	case <-b.closed:
+		msg := websocket.FormatCloseMessage(http.StatusGone, "Broadcaster is closed")
+		conn.WriteControl(websocket.CloseMessage, msg, time.Now())
+		return
+	case b.reg <- msgchan:
+	}
 	defer func() {
-		b.unreg <- msgchan
+		select {
+		case <-b.closed:
+		case b.unreg <- msgchan:
+		}
 	}()
 
 	for m := range msgchan {
