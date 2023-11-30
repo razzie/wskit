@@ -14,7 +14,9 @@ type testData struct {
 
 func TestBroadcast(t *testing.T) {
 	ch := make(chan testData)
-	b := Broadcaster[testData](ch)
+	defer close(ch)
+
+	b := Broadcaster(ch)
 	server := httptest.NewServer(b)
 	defer server.Close()
 
