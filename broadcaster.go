@@ -126,6 +126,11 @@ func (b *broadcaster[T]) broadcast(m T) {
 		client := client
 		go func() {
 			defer wg.Done()
+			select { // try non-blocking first
+			case client <- bytes:
+				return
+			default:
+			}
 			select {
 			case client <- bytes:
 			case <-timeout:
