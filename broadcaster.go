@@ -120,6 +120,8 @@ func (b *broadcaster[T]) broadcast(m T) {
 
 	timeout := make(chan struct{})
 	time.AfterFunc(b.timeout, func() { close(timeout) })
+
+	unreg := make(chan chan<- []byte, len(b.clients))
 	var wg sync.WaitGroup
 	wg.Add(len(b.clients))
 	for client := range b.clients {
@@ -134,11 +136,16 @@ func (b *broadcaster[T]) broadcast(m T) {
 			select {
 			case client <- bytes:
 			case <-timeout:
-				go func() { b.unreg <- client }()
+				unreg <- client
 			}
 		}()
 	}
 	wg.Wait()
+	close(unreg)
+	for client := range unreg {
+		delete(b.clients, client)
+		close(client)
+	}
 }
 
 func (b *broadcaster[T]) close() {
