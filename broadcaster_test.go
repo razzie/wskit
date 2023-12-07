@@ -1,6 +1,9 @@
 package wskit
 
 import (
+	"bytes"
+	"encoding/gob"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -84,4 +87,42 @@ func TestTimeout(t *testing.T) {
 	var result testData
 	assert.NoError(t, ws.ReadJSON(&result))
 	assert.NotNil(t, ws.ReadJSON(&result))
+}
+
+func encode(o any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	if err := enc.Encode(o); err != nil {
+		return nil, err
+	}
+	return io.ReadAll(&buf)
+}
+
+func decode(p []byte, o any) error {
+	buf := bytes.NewBuffer(p)
+	dec := gob.NewDecoder(buf)
+	return dec.Decode(o)
+}
+
+func TestCustomMarshaler(t *testing.T) {
+	ch := make(chan testData, 1)
+	defer close(ch)
+
+	b := Broadcaster(ch, WithMarshaler(encode, false))
+	server := httptest.NewServer(b)
+	defer server.Close()
+
+	url := "ws" + server.URL[4:]
+	ws, _, err := websocket.DefaultDialer.Dial(url, nil)
+	assert.NoError(t, err)
+	defer ws.Close()
+
+	ch <- testData{N: 1}
+
+	var m testData
+	mType, p, err := ws.ReadMessage()
+	assert.NoError(t, err)
+	assert.NoError(t, decode(p, &m))
+	assert.Equal(t, 1, m.N)
+	assert.Equal(t, websocket.BinaryMessage, mType)
 }

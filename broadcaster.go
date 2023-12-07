@@ -10,6 +10,22 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+var (
+	defaultUpgrader = websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
+	}
+
+	defaultBroadcasterOptions = broadcasterOptions{
+		upgrader:    &defaultUpgrader,
+		timeout:     -1,
+		logger:      slog.Default(),
+		marshaler:   json.Marshal,
+		messageType: websocket.TextMessage,
+	}
+)
+
 type BroadcasterOption func(*broadcasterOptions)
 
 func WithTimeout(timeout time.Duration) BroadcasterOption {
@@ -36,30 +52,31 @@ func WithLogger(logger *slog.Logger) BroadcasterOption {
 	}
 }
 
+func WithMarshaler(marshaler func(any) ([]byte, error), isText bool) BroadcasterOption {
+	return func(bo *broadcasterOptions) {
+		bo.marshaler = marshaler
+		if isText {
+			bo.messageType = websocket.TextMessage
+		} else {
+			bo.messageType = websocket.BinaryMessage
+		}
+	}
+}
+
 func Broadcaster[T any](input <-chan T, options ...BroadcasterOption) http.Handler {
 	b := &broadcaster[T]{
-		broadcasterOptions: broadcasterOptions{
-			upgrader: &defaultUpgrader,
-			timeout:  -1,
-			logger:   slog.Default(),
-		},
-		input:   input,
-		clients: make(map[chan<- []byte]bool),
-		reg:     make(chan chan<- []byte),
-		unreg:   make(chan chan<- []byte),
-		closed:  make(chan struct{}),
+		broadcasterOptions: defaultBroadcasterOptions,
+		input:              input,
+		clients:            make(map[chan<- []byte]bool),
+		reg:                make(chan chan<- []byte),
+		unreg:              make(chan chan<- []byte),
+		closed:             make(chan struct{}),
 	}
 	for _, opt := range options {
 		opt(&b.broadcasterOptions)
 	}
 	go b.run()
 	return b
-}
-
-var defaultUpgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
 }
 
 type broadcaster[T any] struct {
@@ -76,6 +93,8 @@ type broadcasterOptions struct {
 	upgrader       *websocket.Upgrader
 	responseHeader http.Header
 	logger         *slog.Logger
+	marshaler      func(any) ([]byte, error)
+	messageType    int
 }
 
 func (b *broadcaster[T]) run() {
@@ -105,7 +124,7 @@ func (b *broadcaster[T]) broadcast(m T) {
 		return
 	}
 
-	bytes, err := json.Marshal(m)
+	bytes, err := b.marshaler(m)
 	if err != nil {
 		b.logger.Error("failed to serialize broadcasted message: %v", err)
 		return
@@ -180,7 +199,7 @@ func (b *broadcaster[T]) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	for m := range msgchan {
-		if err := conn.WriteMessage(websocket.TextMessage, m); err != nil {
+		if err := conn.WriteMessage(b.messageType, m); err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				b.logger.Error("unexpected websocket error: %v", err)
 			}
