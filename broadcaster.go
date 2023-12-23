@@ -126,7 +126,7 @@ func (b *broadcaster[T]) broadcast(m T) {
 
 	bytes, err := b.marshaler(m)
 	if err != nil {
-		b.logger.Error("failed to serialize broadcasted message: %v", err)
+		b.logger.Error("failed to serialize broadcasted message", slog.Any("err", err))
 		return
 	}
 
@@ -201,7 +201,7 @@ func (b *broadcaster[T]) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for m := range msgchan {
 		if err := conn.WriteMessage(b.messageType, m); err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				b.logger.Error("unexpected websocket error: %v", err)
+				b.logger.Error("unexpected websocket error", err, slog.Any("err", err))
 			}
 			return
 		}
