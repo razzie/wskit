@@ -121,12 +121,15 @@ func (b *broadcaster[T]) run() {
 
 func (b *broadcaster[T]) broadcast(m T) {
 	if len(b.clients) == 0 {
+		b.logger.Debug("dropping message", slog.Any("message", m))
 		return
 	}
 
 	bytes, err := b.marshaler(m)
 	if err != nil {
-		b.logger.Error("failed to serialize broadcasted message", slog.Any("err", err))
+		b.logger.Error("failed to serialize broadcasted message",
+			slog.Any("message", m),
+			slog.Any("err", err))
 		return
 	}
 
@@ -161,9 +164,12 @@ func (b *broadcaster[T]) broadcast(m T) {
 	}
 	wg.Wait()
 	close(unreg)
-	for client := range unreg {
-		delete(b.clients, client)
-		close(client)
+	if timeouts := len(unreg); timeouts > 0 {
+		b.logger.Debug("timeout", slog.Int("num_clients", timeouts))
+		for client := range unreg {
+			delete(b.clients, client)
+			close(client)
+		}
 	}
 }
 
@@ -198,12 +204,18 @@ func (b *broadcaster[T]) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	b.logger.Debug("connection opened", slog.Any("remote_addr", conn.RemoteAddr()))
+
 	for m := range msgchan {
 		if err := conn.WriteMessage(b.messageType, m); err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				b.logger.Error("unexpected websocket error", err, slog.Any("err", err))
+				b.logger.Error("unexpected websocket error",
+					slog.Any("err", err),
+					slog.Any("remote_addr", conn.RemoteAddr()))
 			}
 			return
 		}
 	}
+
+	b.logger.Debug("connection closed", slog.Any("remote_addr", conn.RemoteAddr()))
 }
